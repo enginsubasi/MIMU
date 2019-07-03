@@ -1,0 +1,8 @@
+PCB
+-Width: 3 cm
+-Height: 4.5 cm
+
+Box
+-Width: 3.5 cm
+-Height: 5.0 cm
+-Length: 1.5 cm
