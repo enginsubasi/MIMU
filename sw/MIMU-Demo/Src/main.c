@@ -44,6 +44,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include <string.h>
+#include "LIS3DSH.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -58,15 +60,18 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+#define SPI1CSLOW                HAL_GPIO_WritePin(SPI_CS_GPIO_Port,SPI_CS_Pin,GPIO_PIN_RESET)
+#define SPI1CSHIGH               HAL_GPIO_WritePin(SPI_CS_GPIO_Port,SPI_CS_Pin,GPIO_PIN_SET)
 
+uint8_t transmitBuffer[16];
+uint8_t transmitBufLen;
+
+char traTemp[64];
+char recTemp[64];
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc;
-
 SPI_HandleTypeDef hspi1;
-
-TIM_HandleTypeDef htim17;
 
 UART_HandleTypeDef huart1;
 
@@ -79,10 +84,11 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
-static void MX_ADC_Init(void);
-static void MX_TIM17_Init(void);
 /* USER CODE BEGIN PFP */
-
+uint8_t LIS3DSH_HAL_ReadReg8(uint8_t reg);
+uint16_t LIS3DSH_HAL_ReadReg16(uint8_t reg);
+uint8_t LIS3DSH_HAL_WriteReg8(uint8_t reg,uint8_t val);
+uint8_t LIS3DSH_HAL_ReadTemp(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -120,16 +126,59 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   MX_USART1_UART_Init();
-  MX_ADC_Init();
-  MX_TIM17_Init();
   /* USER CODE BEGIN 2 */
+
+  SPI1CSHIGH;
+
+  HAL_Delay(500);
+
+  LIS3DSH_HAL_WriteReg8(LIS3DSH_REG_CTRL4,LIS3DSH_ALL_AXIS_EN|LIS3DSH_ODR_3_125);
+
+  LIS3DSH_HAL_WriteReg8(LIS3DSH_REG_CTRL5,LIS3DSH_AAFLTR50Hz|LIS3DSH_2G|LIS3DSH_STNORMAL|LIS3DSH_SPI4WIRE);
+
+  LIS3DSH_HAL_WriteReg8(LIS3DSH_REG_OFFX,0);
+  LIS3DSH_HAL_WriteReg8(LIS3DSH_REG_OFFY,0);
+  LIS3DSH_HAL_WriteReg8(LIS3DSH_REG_OFFZ,0);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+  HAL_Delay(500);
+
+  int16_t x,y,z;
+
   while (1)
   {
+      HAL_Delay(100);
+      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
+
+      HAL_Delay(100);
+      HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
+
+      // @div4  3 axis 16bit read takes 96 uS
+      // @div8  3 axis ... 104 uS
+      // @div16 3 axis ... 114 uS
+      // @div32 3 axis ... 134 uS
+
+      x = LIS3DSH_HAL_ReadReg16(LIS3DSH_REG_OUTXL);
+      y = LIS3DSH_HAL_ReadReg16(LIS3DSH_REG_OUTYL);
+      z = LIS3DSH_HAL_ReadReg16(LIS3DSH_REG_OUTZL);
+
+      /*x = ( x / 16777.0 ) * 980.665 ;
+      y = ( y / 16777.0 ) * 980.665 ;
+      z = ( z / 16777.0 ) * 980.665 ;*/
+
+      //double xangle = asin(x/980.665)*180.0/3.14;
+      //double yangle = asin(y/980.665)*180.0/3.14;
+
+      sprintf((char*)traTemp,"#X%5d #Y%5d #Z%5d #T%6lu\r\n",x,y,z,HAL_GetTick());
+      //sprintf((char*)traTemp,"X:%d Y: %d Z: %d XAngle: %f YAngle: %f \r\n\r\n",(int16_t)x,(int16_t)y,(int16_t)z,xangle,yangle);
+
+      HAL_UART_Transmit(&huart1,(uint8_t*)traTemp,strlen((char*)traTemp),5000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -149,10 +198,8 @@ void SystemClock_Config(void)
 
   /**Initializes the CPU, AHB and APB busses clocks 
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI14|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.HSI14State = RCC_HSI14_ON;
-  RCC_OscInitStruct.HSI14CalibrationValue = 16;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL6;
@@ -182,58 +229,6 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief ADC Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ADC_Init(void)
-{
-
-  /* USER CODE BEGIN ADC_Init 0 */
-
-  /* USER CODE END ADC_Init 0 */
-
-  ADC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN ADC_Init 1 */
-
-  /* USER CODE END ADC_Init 1 */
-  /**Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion) 
-  */
-  hadc.Instance = ADC1;
-  hadc.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
-  hadc.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD;
-  hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  hadc.Init.LowPowerAutoWait = DISABLE;
-  hadc.Init.LowPowerAutoPowerOff = DISABLE;
-  hadc.Init.ContinuousConvMode = DISABLE;
-  hadc.Init.DiscontinuousConvMode = DISABLE;
-  hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc.Init.DMAContinuousRequests = DISABLE;
-  hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
-  if (HAL_ADC_Init(&hadc) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /**Configure for the selected ADC regular channel to be converted. 
-  */
-  sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
-  sConfig.Rank = ADC_RANK_CHANNEL_NUMBER;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN ADC_Init 2 */
-
-  /* USER CODE END ADC_Init 2 */
-
-}
-
-/**
   * @brief SPI1 Initialization Function
   * @param None
   * @retval None
@@ -255,8 +250,8 @@ static void MX_SPI1_Init(void)
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
   hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
-  hspi1.Init.NSS = SPI_NSS_HARD_OUTPUT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -270,38 +265,6 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
-
-}
-
-/**
-  * @brief TIM17 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM17_Init(void)
-{
-
-  /* USER CODE BEGIN TIM17_Init 0 */
-
-  /* USER CODE END TIM17_Init 0 */
-
-  /* USER CODE BEGIN TIM17_Init 1 */
-
-  /* USER CODE END TIM17_Init 1 */
-  htim17.Instance = TIM17;
-  htim17.Init.Prescaler = 47;
-  htim17.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim17.Init.Period = 999;
-  htim17.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim17.Init.RepetitionCounter = 0;
-  htim17.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim17) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM17_Init 2 */
-
-  /* USER CODE END TIM17_Init 2 */
 
 }
 
@@ -357,17 +320,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LED1_Pin|SPI_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : LED1_Pin */
-  GPIO_InitStruct.Pin = LED1_Pin;
+  /*Configure GPIO pins : LED1_Pin SPI_CS_Pin */
+  GPIO_InitStruct.Pin = LED1_Pin|SPI_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED1_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LED2_Pin */
   GPIO_InitStruct.Pin = LED2_Pin;
@@ -385,7 +348,71 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/*
+ * @about: LIS3DSH Read 8 bit data from register
+ */
+ uint8_t LIS3DSH_HAL_ReadReg8(uint8_t reg){
+    transmitBuffer[0] = 0x80 | reg;
+    transmitBufLen = 1;
+    SPI1CSLOW;
 
+    HAL_SPI_Transmit(&hspi1,transmitBuffer,transmitBufLen,5000);
+    while(HAL_SPI_GetState(&hspi1)== HAL_SPI_STATE_BUSY_TX) {;}
+
+    HAL_SPI_Receive(&hspi1,transmitBuffer,transmitBufLen,5000);
+    while(HAL_SPI_GetState(&hspi1)== HAL_SPI_STATE_BUSY_RX){;}
+
+    SPI1CSHIGH;
+
+    return(transmitBuffer[0]);
+}
+
+ /*
+ * @about: LIS3DSH Read 8 bit data from register
+ */
+ uint16_t LIS3DSH_HAL_ReadReg16(uint8_t reg){
+    transmitBuffer[0] = 0x80 | reg;
+    static uint8_t r1,r2;
+    SPI1CSLOW;
+
+    HAL_SPI_Transmit(&hspi1,transmitBuffer,1,5000);
+    while(HAL_SPI_GetState(&hspi1)== HAL_SPI_STATE_BUSY_TX) {;}
+
+    HAL_SPI_Receive(&hspi1,&r1,1,5000);
+    while(HAL_SPI_GetState(&hspi1)== HAL_SPI_STATE_BUSY_RX){;}
+
+    HAL_SPI_Receive(&hspi1,&r2,1,5000);
+    while(HAL_SPI_GetState(&hspi1)== HAL_SPI_STATE_BUSY_RX){;}
+
+    SPI1CSHIGH;
+
+    return(r1|(r2<<8));
+}
+
+/*
+ * @about: LIS3DSH Read 8 bit data from register
+ */
+uint8_t LIS3DSH_HAL_WriteReg8(uint8_t reg,uint8_t val){
+    transmitBuffer[0] = ( ~0x80 & reg );
+    transmitBuffer[1] = ( val );
+    transmitBufLen = 1;
+    SPI1CSLOW;
+    HAL_SPI_Transmit(&hspi1,transmitBuffer,transmitBufLen,5000);
+    while(HAL_SPI_GetState(&hspi1)== HAL_SPI_STATE_BUSY_TX) {;}
+    transmitBuffer[0] = transmitBuffer[1];
+    HAL_SPI_Transmit(&hspi1,transmitBuffer,transmitBufLen,5000);
+    while(HAL_SPI_GetState(&hspi1)== HAL_SPI_STATE_BUSY_TX) {;}
+    SPI1CSHIGH;
+
+    return(transmitBuffer[0]);
+}
+
+/*
+ * @about: Read 12Bit Temperature value
+ */
+uint8_t LIS3DSH_HAL_ReadTemp(void){
+    return(LIS3DSH_HAL_ReadReg8(LIS3DSH_REG_OUTT));
+}
 /* USER CODE END 4 */
 
 /**
